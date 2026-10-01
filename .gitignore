@@ -1,5 +1,5 @@
 __pycache__/
-region_report_*.json
+/region_report_*.json
 spike/.venv/
 spike/shareguard/lib/
 spike/shareguard/out/
