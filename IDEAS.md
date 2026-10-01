@@ -379,6 +379,7 @@ Swap #5 used **775,639 gas: with the API's 450,000 it would have reverted again.
 - **Whether Binance Wallet / Agentic Wallet can send EIP-7702 batches.**
 - **Region behaviour for UK, Canada, Japan and the Netherlands.** These couldn't be tested; the US block is the only direct evidence.
 - **The Binance Transaction API (simulation/broadcast).** Not exercised yet; we used `eth_call` / `eth_estimateGas`. The hackathon stack expects it.
+- **The spike contract has a known arbitrary-call hole.** `swapForShares` calls any caller-supplied router and data, so anyone who approved it could be drained (router = token, data = `transferFrom`). It's harmless today because it only ran on forks. v1 must allow-list routers; see `PARITY_BLUEPRINT.md` §10.
 - **ShareGuard is unaudited spike code.** It needs hardening (reentrancy guard, pause check, the Ondo feed) before any mainnet deployment.
 
 ## The DX report (25%): write it yourself, as you go

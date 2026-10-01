@@ -14,6 +14,10 @@ interface IMultiplier {
 }
 
 /// @title ShareGuard (spike, unaudited)
+/// @dev DO NOT DEPLOY. Known issue: swapForShares calls any caller-supplied `router` with any
+///      `data`, so an attacker could pass router = a token and data = transferFrom(victim, ...)
+///      and drain anyone who approved this contract. ShareGuard v1 must allow-list routers and
+///      approve targets (PARITY_BLUEPRINT.md §10, fork test G).
 /// @notice Slippage protection measured in shares of the underlying stock, not in tokens.
 ///         One token of a tokenized stock is `multiplier` shares, and the multiplier differs per
 ///         issuer (Ondo NFLX = 10.0, bStock NFLX = 1.0). ShareGuard converts what the trader
