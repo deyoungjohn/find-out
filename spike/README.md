@@ -23,7 +23,7 @@ Nothing here touches your main wallet. The fork test spends nothing. Only `live_
 ssh ubuntu@<your-ec2-ip>
 git clone -b claude/loving-shannon-cqlztx https://github.com/deyoungjohn/find-out.git
 cd find-out/spike
-./setup.sh                      # ends with: 9 unit tests passed
+./setup.sh                      # finishes with "9 tests passed" and "Setup done." and returns to the prompt
 export PATH="$HOME/.foundry/bin:$PATH"
 ```
 
@@ -32,9 +32,10 @@ If the repo is private, clone with a GitHub token or SSH key. 2 GB of RAM is eno
 ## 1. Load your API key without leaving it in shell history
 
 ```bash
-read -rs BINANCE_W3_API_KEY && export BINANCE_W3_API_KEY        # paste, Enter
-read -rs BINANCE_W3_API_SECRET && export BINANCE_W3_API_SECRET  # paste, Enter
+read -rsp "API key: " BINANCE_W3_API_KEY && echo && export BINANCE_W3_API_KEY
+read -rsp "API secret: " BINANCE_W3_API_SECRET && echo && export BINANCE_W3_API_SECRET
 ```
+Nothing appears while you paste (the input is hidden on purpose). Paste, press Enter, and the next prompt appears.
 
 Optional: a dedicated BSC RPC (a free NodeReal, Ankr or QuickNode key) is more reliable for forking than the public one:
 `export BSC_RPC=https://...`
@@ -81,7 +82,7 @@ Save the key in a password manager, then clear the terminal. Fund the address on
 ## 5. Live buys (dry run first)
 
 ```bash
-read -rs PARITY_PK && export PARITY_PK      # burner key, never your main wallet
+read -rsp "Burner private key: " PARITY_PK && echo && export PARITY_PK   # never your main wallet
 .venv/bin/python live_buy.py --token NVDAB  --usdt 4          # dry run: balances, quote, route, simulation
 .venv/bin/python live_buy.py --token NVDAB  --usdt 4 --send   # type "BUY NVDAB" to confirm
 .venv/bin/python live_buy.py --token NVDAon --usdt 4 --send   # type "BUY NVDAon"
