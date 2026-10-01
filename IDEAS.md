@@ -226,80 +226,160 @@ These are subjective estimates against the published rubric:
 
 ### Eligibility: how each idea handles it
 Transfers work, but an app that helps people buy these tokens takes on the issuer's user-eligibility duties. Neither idea can make that go away, so both are designed not to be a new distributor.
-- **Parity**: execution goes through the user's own **Binance Web3 Wallet / Agentic Wallet and the Trading API**. The venue that already onboarded the user places the trade. Parity supplies the quote, the integrity grade and the ShareGuard check. Quotes, integrity scores and the MCP data need no eligibility at all. The app also blocks the hackathon's restricted regions itself. **Verified 2026-10-01 (see Findings log):** the Trading API enforces region by the **calling server's IP**, not by token or wallet. So Binance checks Parity's backend, not the end user, and blocking end users is Parity's job.
+- **Parity**: execution goes through the user's own **Binance Web3 Wallet / Agentic Wallet and the Trading API**. The venue that already onboarded the user places the trade. Parity supplies the quote, the integrity grade and the ShareGuard check. Quotes, integrity scores and the MCP data need no eligibility at all. The app also blocks the hackathon's restricted regions itself. **Verified 2026-10-01 (see Findings §F3):** the Trading API enforces region by the **calling server's IP**, not by token or wallet. So Binance checks Parity's backend, not the end user, and blocking end users is Parity's job.
 - **Stipend**: this is the more exposed of the two, because an agent managing someone's securities for a fee looks like investment management. Build it as a **policy module on the user's own smart account** (EIP-7702 / ERC-7579 session key) instead of a separate vault, so the tokens never leave the user's wallet and the agent only holds a capped, revocable key. Trades still go through the Binance wallet stack. For the hackathon, demo only with your own funds.
 - **Both**: no issuer mint or redemption (that requires issuer KYC). Secondary-market only, small amounts from your own wallet, with the restricted-regions gate on.
 
-## Findings log
+## Findings: everything we've verified so far
 
-### 2026-10-01: Trading API region check (`research/region_check.py`, run by the team)
-Five runs, $10 USDT → stock quotes. Raw reports were kept locally because they contain the team's wallet addresses.
+This section is the project's lab notebook. Every claim has a date, how we got it, and where the raw evidence lives. Numbers are copied from tool output, not estimated. When a later finding corrected an earlier one, both are kept and the correction is marked.
+
+**Evidence locations**
+- `research/snapshot-2026-09-30/`: public-API and on-chain snapshot (§F1, §F2)
+- `research/transfer_check.py`: compliance and transfer simulation (§F2)
+- `research/region_check.py`: Trading API region runs. The team's raw reports stay off-repo because they contain wallet addresses (§F3).
+- `spike/results/`: fork-test logs, route captures, live-buy JSON (§F4–§F7)
+- On-chain transactions: BscScan links in §F6
+
+### F1. Market data and units (2026-09-30, public endpoints + BSC RPC)
+- **Universe on BSC:** 517 tokenized tickers: Ondo 458 tokens, bStock 87, xStocks 130. 38 tickers are listed by all three issuers and 120 by at least two.
+- **A token is not a share, and issuers disagree on units.**
+  - 242 of 458 Ondo BSC tokens have a share multiplier other than 1.
+  - Split-adjusted examples: Ondo NFLX = 10.0 shares per token, CRWD = 4.0, SOXS = 0.1017. bStock and xStocks NFLX = 1.0.
+  - Anyone comparing raw token prices sees fake cross-issuer "arbitrage": NFLX 899%, GME 869%, MRVL 713%, IBM 563%.
+- **The same token's multiplier differs by source.** NVDAx: list API 1.000000, dynamic API 1.000918, token contract `multiplier()` 1.001701. List and dynamic disagree on 17 of 103 issuer–ticker pairs. On-chain vs dynamic: 12 of 38 xStocks tokens disagree, while bStock matches on 38 of 38.
+- **Where the on-chain truth lives.** bStock exposes `uiMultiplier()`, xStocks exposes `multiplier()`, and Ondo exposes **no** on-chain multiplier (only the API's `sharesMultiplier`).
+- **Share-true premiums in US regular hours are tiny for the two live issuers.** Ondo: median +0.004%, mean |premium| 0.046%. bStock: median +0.062%, mean |premium| 0.072%. xStocks on BSC: median −1.17%, with stale outliers from −90% to +865%.
+- **Where volume is.** 24h on-chain volume across the 38 shared tickers: bStock $48.3M, Ondo $4.3M, xStocks $96. **xStocks on BSC is a ghost market** and should only appear in Parity as a "trap" example, never as an execution venue.
+- **The multiplier records dividends.** Across 26 Ondo tokens, multiplier growth tracks dividend yield with Pearson r = 0.917 (e.g. PFE +6.09% vs 5.98% yield). This is the basis of Idea 2 (Stipend).
+- **Metadata gaps:**
+  - `marketStatus` is returned only for Ondo; `null` for bStock and xStocks.
+  - `liquidity` reads $0 on tokens that make thousands of router transfers per hour.
+  - `tokenInfo.volume24h` is the US stock's volume, not on-chain volume.
+  - bStock's `stockInfo.price` is `null`, so a bStock reference price has to be borrowed from another issuer's token for the same ticker.
+
+### F2. Token contracts and compliance (2026-09-30, `research/transfer_check.py`)
+- **All three issuers use blocklists, not allowlists:**
+  - Ondo: `compliance()` → `isBlocked` / `isSanctioned`, plus `tokenPauseManager()` with `isTokenPaused`.
+  - bStock: `addToBlocklist` / `sanctionedAddresses` behind role-based access.
+  - xStocks: `sanctionsList()` + `isPaused()`.
+- **Contracts can hold and send these tokens.** Simulated transfers from real holders into a brand-new wallet and a brand-new contract passed for NVDAon, NVDAB and NVDAx (6/6), and an overdraw control reverted. Later, the fork tests and live buys proved this again with real routes (§F5, §F6).
+- **The binding constraint is off-chain eligibility, not the contract.** Issuers make the app or venue responsible for geography and eligibility. Ondo attaches eligibility representations to secondary buyers, and issuer mint and redeem need KYC. Parity stays secondary-market only.
+
+### F3. Trading API: who gets blocked (2026-10-01, `research/region_check.py`, five runs by the team)
 
 | Run (UTC) | Caller IP | Wallet | Result |
 |---|---|---|---|
-| 10:19 | not recorded | fresh random | All 8 tokens: quote ✓, quote with wallet ✓, swap built ✓ (Ondo needs the wallet, see below) |
-| 10:30 | not recorded | team agent wallet | Same as above |
-| 10:33 | **NG** | team wallet | Same as above |
-| 10:50 | **US** (VPN) | fresh random | **Every call refused**, including `supported/chain`: `40304 "Service not available due to compliance restriction"`, returned as **HTTP 200** |
-| 10:51 | **MX** (VPN) | fresh random | Same as the NG run |
+| 10:19 | not recorded | fresh random | All 8 tokens quoted and swap transactions built |
+| 10:30 | not recorded | team agent wallet | Same |
+| 10:33 | Nigeria | team wallet | Same |
+| 10:50 | **United States (VPN)** | fresh random | **Every call refused**, even `supported/chain`: `40304 "Service not available due to compliance restriction"`, sent as **HTTP 200** |
+| 10:51 | Mexico (VPN) | fresh random | Same as Nigeria |
+| ~12:30 | **South Korea (AWS Seoul EC2)** | test addresses | All captures succeeded |
 
-UK and Canada VPN exits could not connect, so they're untested.
+UK and Canada VPN exits couldn't connect, so they're untested.
 
-**What we learned**
-1. **Region is enforced on the API caller's IP, for the whole API.** It's not per token and not per wallet: a random wallet with no history got bStock swaps built just like a real one. For a web app, the caller is **our backend**. So (a) the backend must run in an allowed country (avoid US regions, AWS London, DigitalOcean Amsterdam, Tokyo and Canada; AWS Seoul is the current candidate, pending the check in `spike/README.md`), and (b) Binance never sees the end user, so Parity must geo-block restricted regions itself. Agentic Wallet / `baw` calls come from the user's own machine, so there Binance's check applies directly.
-2. **At $10, cost is gas, not issuer choice.** Effective price was within ±0.1% of the token's unit price for all 8 tokens. `tradeFee` was $0.02–0.04 per order. That matches 450k gas at BSC prices, so ~0.2–0.4% of a $10 order is network fee, against a ~0.05% share-true gap between Ondo and bStock. **Parity's pitch is correctness (units, traps, a guarantee in shares), not savings.** The consolidated quote shows total cost including gas and prefers fewer hops for small orders. Larger sizes are still untested.
-3. **One route, one vendor.** Every stock quote returned exactly one route from `LiquidMesh` through router `0xB44446b0c8E56988c34f7Ff73Ae904982b5FdDA5`, which is also the approve target. BNB returned two routes (adding LI.FI or Pancake). Parity has to build the cross-issuer comparison itself by quoting each issuer's token separately.
-4. **Issuers are linked by pools, and routes can be long.** NVDAon was bought via USDT → USDC → **NVDAB** → NVDAon (a Uniswap v4 NVDAB/NVDAon pool). One NVDAB quote went USDT → USD1 (RFQ Halfmoon) → **WBNB** → USDC → NVDAB, four hops through BNB for "$10 of Nvidia". The next run routed NVDAB in one hop. Parity should show which path and issuer you actually bought through.
-5. **Ondo's docs and behaviour disagree.** Docs: Ondo is RFQ (EIP-712 signature + `order/submit`). Observed in US pre-market: a quote without a wallet fails with `40001 "userWalletAddress is required for RFQ (Ondo) quote"`, but with a wallet the API returns `executionMode: SWAP`, `rfq: null`. It may switch to real RFQ during regular hours, so code must handle both. bStock reported `TRADING` with `marketStatus: null` at the same time.
-6. **Swap transactions default to 1% slippage** (`minReceiveAmount` = quote − 1%). A share-based minimum from ShareGuard can be tighter.
+- **Region is enforced on the IP that calls the API, for the whole API.** It's not per token and not per wallet. A wallet with no history was served exactly like a real one.
+- **Consequence 1: the backend must live in an allowed country.** AWS Seoul works. Avoid US regions, AWS London, DigitalOcean Amsterdam, Tokyo and Canada.
+- **Consequence 2: Binance never sees Parity's end users.** The web app has to block the hackathon's restricted regions itself (an edge IP-country check plus a declaration). With Agentic Wallet / `baw`, calls come from the user's own machine, so Binance's own check applies.
+- **The error design is a DX finding.** A compliance block that returns HTTP 200 passes any client that only checks status codes.
 
-### 2026-10-01: ShareGuard spike (`spike/`)
-- `ShareGuard.sol` (share-denominated minimum; multiplier from bStock `uiMultiplier()`, xStocks `multiplier()`, or a feed for Ondo) and `BatchExecutor.sol` (EIP-7702 delegate) written. **9/9 offline unit tests pass**, including an NFLX-style 10× multiplier, refund of unspent input, and atomic rollback of a 7702 batch when the share check fails.
-- Fork-test plumbing validated against live BSC state: real USDT funding on the fork, NVDAB's on-chain multiplier read (1.000778), ShareGuard deployed at its fixed address, and the 7702 path executing. The real-calldata replay needs an API key and is run from the EC2 box (`spike/README.md`).
-- **Results from the team's AWS Seoul runs, 2026-10-01** (fork: 12:33–13:46 UTC, live: ~14:07–14:20 UTC). Raw logs, captures and the dry-run JSON: `spike/results/`.
+### F4. Trading API: quotes, routes and fees (2026-10-01, all runs)
+- **One route, one vendor.** Every stock quote returned exactly one route from `LiquidMesh` via router/approve target `0xB44446b0c8E56988c34f7Ff73Ae904982b5FdDA5`. BNB quotes sometimes added a second vendor (LI.FI, Pancake). For stocks the "aggregator" offers no comparison, so Parity has to quote each issuer's token itself.
+- **Routes change minute to minute and cross other assets.** Observed NVDA routes, all for $5–$10 USDT:
+  - One hop: `Metric:NVDAB`, `Elfomofi:NVDAB`, `Metric:NVDAon`.
+  - Through another company's stock: `Elfomofi:SKHYB > Pancakeswap V4:NVDAB` (SK Hynix bStock).
+  - Through crypto: `Biswap V2:BTCB > Topaz Cl:BSC_ETH > Genius:USDC > Uniswap V4:NVDAB` and `Uniswap V4:BTCB > Genius:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon`.
+  - **Through the other issuer:** many Ondo buys go through a Uniswap v4 NVDAB/NVDAon pool, so "buying Ondo" often means buying bStock first.
+- **Ondo: documented as RFQ, behaves as a swap.** The docs describe Ondo as RFQ (EIP-712 signature + `order/submit`). In practice, a quote without a wallet fails with `40001 "userWalletAddress is required for RFQ (Ondo) quote"`. With a wallet, the API returned `executionMode: SWAP`, `rfq: null` in **every** run, pre-market (10:19–13:19 UTC) and in regular hours (13:46, 14:22–14:24 UTC). No RFQ order was ever required.
+- **Ondo's minimum is 5 USD, checked in dollars.** 5 USDT was refused with `40375 "Minimum order amount is 5 USD."` (HTTP 200), because USDT is priced at ~$0.9995. 6 USDT always worked.
+- **The API's gas number is a placeholder.** Every quote and swap returned `estimateGasFee: "450000"` and `tx.gas: 450000`, whatever the route. Real usage ranged from 437,968 to ~1,024,000 (§F6). `tradeFee` (~$0.02–0.04) matches 450,000 × gas price, so the displayed fee is also unreliable for long routes.
+- **Default slippage is 1%** (`minReceiveAmount` = quote − 1%).
+- **Prices are fair at small sizes, with one exception.** Fills landed within ±0.1% of the token's unit price on most routes. The exception is a 4-hop route through BTC and ETH, which cost +0.51% (§F7).
 
-| Check | Result |
-|---|---|
-| Trading API reachable from AWS Seoul | ✅ South Korea isn't blocked, so Seoul is a valid backend region. |
-| A: API calldata replays as a plain wallet | ✅ NVDAB 3/3 runs, NVDAon 2/2 runs. Received within 0.005% of the quote (minReceive = quote − 1%). |
-| B: route works with **ShareGuard as the trader** | ✅ NVDAB 3/3, NVDAon 2/2. **The wrapper design works for both bStock and Ondo.** |
-| C: ShareGuard rejects a share shortfall | ✅ all runs |
-| D: EIP-7702 batch (approve, unchanged API swap, share check) | ✅ all runs. The fallback design works too. |
-| E: the 7702 batch reverts atomically when the share check fails | ✅ all runs (failed at call 2, the share check) |
-| Ondo with 5 USDT | ❌ `40375 "Minimum order amount is 5 USD."`: USDT ≈ $0.9995, so 5 USDT < $5. Fixed by defaulting to 6 USDT. |
-| Ondo during US regular hours (RFQ?) | ✅ At 13:46 UTC (after the 13:30 open) Ondo still returned plain `SWAP`, `rfq: null`. No RFQ mode seen yet. |
-| Live buy NVDAB (6 USDT) | ⚠️ Not executed. The approval succeeded ([tx](https://bscscan.com/tx/0x6a8d334044e2dac39386dbad3fbf8a41b3b8477212fe6ac623dbe134db2af3da), 46,194 gas), then the script crashed while polling for the receipt (public RPC answered 403). |
-| Live buy NVDAon (6 USDT) | ❌ Sent and **reverted: out of gas** ([tx](https://bscscan.com/tx/0xfd7799e772868512799e7a114186a1778c506db765e0b54e05aa583f4481a40c)). No USDT lost; ~0.00002 BNB of gas. See below. |
-| F: route fits the API's own gas limit | _new test, pending the next run_ |
-| Live buys with the fixed script | _pending_ |
+### F5. ShareGuard on a BSC mainnet fork with real API calldata (2026-10-01, `spike/`, run from AWS Seoul)
+Method: `capture_route.py` takes a real quote and swap transaction for (a) a test wallet and (b) the fixed address where the test deploys ShareGuard. `forge test` then immediately replays both on a fork of live BSC. Offline unit tests: 9/9 pass.
 
-**Why the live swap failed: the API's gas number is a placeholder.** Every quote and swap we've seen returns `gas: 450000` (and `estimateGasFee: "450000"`), whatever the route. The NVDAon swap used a 4-hop route (`Topaz Cl:BTCB > Genius:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon`). Sent with 450,000 it reverted with `0x1425ea42` (OpenZeppelin `FailedInnerCall()`) after 434,909 gas. Replaying the same transaction at the previous block: 450,000 → revert, 3,000,000 → success, `eth_estimateGas` → **1,024,328**. Three things hid it:
-- The dry-run simulation (`eth_call`) ran without a gas cap.
-- Foundry doesn't cap gas either, so fork tests A–E passed.
-- The swap was sent with the API's number instead of an estimate.
+| Test | What it proves | NVDAB (4 runs) | NVDAon (3 valid runs) |
+|---|---|---|---|
+| A: replay as plain wallet | API calldata works on the fork; received within 0.005% of quote | ✅ 4/4 | ✅ 3/3 |
+| B: **ShareGuard as the trader** | A contract can trade the API's routes; shares checked on-chain | ✅ 4/4 | ✅ 3/3 |
+| C: ShareGuard rejects a shortfall | A share-denominated minimum reverts a bad fill | ✅ 4/4 | ✅ 3/3 |
+| D: EIP-7702 batch | Wallet runs approve → unchanged API swap → share check in one transaction | ✅ 4/4 | ✅ 3/3 |
+| E: batch reverts atomically | A failed share check undoes the swap (fails at call index 2) | ✅ 4/4 | ✅ 3/3 |
+| F: route fits the API's gas | Added after §F6's revert | ❌ 1/1 flagged (~703k needed vs 450k) | ❌ 1/1 flagged (~1.37M needed vs 450k) |
 
-Fixes in `spike/`:
-- `live_buy.py` re-quotes after you confirm, sends `max(API gas, estimate × 1.25)`, and simulates **at that exact limit** before sending. Checked against the failed transaction: estimate 1,024,328, would send 1,280,410.
-- New fork test **F** fails when a route doesn't fit the API's gas limit.
-- RPC calls fail over across several public endpoints, and the transaction hash is saved before waiting for the receipt.
+The two NVDAon runs at 5 USDT skipped (minimum, §F4) and aren't counted. F's gas figures are approximate: they include fork cold-access costs and a calldata upper bound. The point is direction, not exact numbers.
 
-**For Parity:** never trust the API's gas field; always estimate. And the 1% `minReceive` does nothing against out-of-gas reverts, which still cost the user gas.
+**Old captures don't replay.** Captures ~90 minutes old reverted on replay; a ~20-minute-old transaction still simulated. Quotes have a limited lifetime, so capture-then-replay must happen back to back. The live script re-quotes after the user confirms.
 
-**Prices in shares (pre-market and just after the open):**
+### F6. Live mainnet buys (2026-10-01, burner wallet `0x2Bf7EdF53bc6BE6FF98F149387F3818cE28d2930`, from AWS Seoul)
 
-| UTC | Token | Route | USDT per share | Reference | Premium |
+| # | UTC | Action | Result | Gas used / limit | Evidence |
 |---|---|---|---|---|---|
-| 12:33 | NVDAB | `Metric:NVDAB` | 230.42 | 230.22 | +0.09% |
-| 12:45 | NVDAB | `Elfomofi:SKHYB > Pancakeswap V4:NVDAB` | 230.38 | 230.40 | −0.01% |
-| 13:19 | NVDAon | `Lista V3:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon` | 229.90 | 230.16 | −0.11% |
-| 13:45 | NVDAB | `Biswap V2:BTCB > Topaz Cl:BSC_ETH > Genius:USDC > Uniswap V4:NVDAB` | **231.73** | 230.55 | **+0.51%** |
-| 13:46 | NVDAon | `Metric:NVDAon` | **230.69** | 230.55 | **+0.06%** |
+| 1 | ~14:10 | Approve 6 USDT to router | ✅ | 46,194 | [tx](https://bscscan.com/tx/0x6a8d334044e2dac39386dbad3fbf8a41b3b8477212fe6ac623dbe134db2af3da) |
+| 2 | ~14:12 | Swap 6 USDT → NVDAon (first script) | ❌ **reverted, out of gas** | 434,909 / 450,000 (API value) | [tx](https://bscscan.com/tx/0xfd7799e772868512799e7a114186a1778c506db765e0b54e05aa583f4481a40c) |
+| 3 | 14:23 | Swap 6 USDT → NVDAB (fixed script; used approval #1) | ✅ | 437,968 / 698,076 | [tx](https://bscscan.com/tx/0x726aace915e720ca46f4cfb344a7283c4aa1ef59bde225fdea9796e2f0eb0ba7) |
+| 4 | 14:24 | Approve 6 USDT to router | ✅ | 46,194 / 60,548 | [tx](https://bscscan.com/tx/0xa0398a478172679e30e03c6c09dfec9483466d6f7f3c7b95dfdb3802cb173e8e) |
+| 5 | 14:24 | Swap 6 USDT → NVDAon (fixed script) | ✅ | 775,639 / 1,177,930 | [tx](https://bscscan.com/tx/0xb3ab17385d3872dfaec05367582739a10b08a9586861c56e02f1c2e264c49637) |
 
-(References come from the public endpoint within ~1 minute of each capture. bStock's own `stockInfo.price` is `null`, so the reference is taken from the Ondo token.)
+**Final wallet state:** 3 USDT, 0.025957 NVDAB, 0.026093 NVDAon, allowance 0. **Total gas for all five transactions: 0.000087 BNB (~$0.07)** at 0.05 gwei. No USDT was lost to the revert.
 
-**What this changes:** issuer choice *can* matter even at $6. At 13:45–13:46, Nvidia via bStock cost **0.45% more** than via Ondo, because the bStock route went through BTCB and ETH in 4 hops while the Ondo route was one hop. Earlier the two were within 0.1%. So the cost difference comes from **route quality at that moment**, not the issuer's average spread. That's exactly what a consolidated quote per issuer catches. This refines lesson 2 of the region check above ("correctness, not savings"): pitch both, and show the saving per order instead of promising one. Routes also pass through other stocks (SKHYB = SK Hynix) and through BTC/ETH/BNB, all inside one transaction.
+**What happened in #2.** The route was `Topaz Cl:BTCB > Genius:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon`, sent with the API's `gas: 450000`. It reverted with `0x1425ea42` (OpenZeppelin `FailedInnerCall()`). Replaying it at the previous block: 450,000 → revert, 3,000,000 → success, `eth_estimateGas` → 1,024,328. Three things hid it:
+- the dry-run `eth_call` had no gas cap;
+- Foundry doesn't cap gas, so fork tests A–E passed;
+- the swap was sent with the API's number.
 
-**Design decision (updated):** ShareGuard as the trader works for **both** issuers, so build it first. Keep the 7702 batch for Agentic Wallet. Ondo still needs its multiplier from a feed.
+Before #2, the script also crashed after #1 because `bsc-rpc.publicnode.com` began answering HTTP 403 to the EC2 box while the script was polling for the receipt.
+
+**Fix, proven by #3 and #5.** The script now:
+- re-quotes after the user confirms;
+- sends `max(API gas, eth_estimateGas × 1.25)`;
+- simulates at that exact limit before sending;
+- saves the transaction hash before waiting;
+- fails over across public RPCs.
+
+Swap #5 used **775,639 gas: with the API's 450,000 it would have reverted again.** Swap #3 used 437,968, just under 450,000. So the API value fits short routes by luck, and `eth_estimateGas` overshot actual usage by ~21–27%, which is a safe margin.
+
+**What the live fills show.**
+- **NVDAB (#3):** quoted 0.026090 at send, received **0.025957 (−0.51% vs quote)**, still above the 1% minimum. In shares: 0.025977 shares → **230.97 USDT per share**. A one-hop route (`Elfomofi:NVDAB`) still under-delivered by half a percent.
+- **NVDAon (#5):** quoted 0.026090, received **0.026093 (+0.01% vs quote)**. In shares: 0.026137 shares → **229.56 USDT per share**, **−0.12%** vs the 229.84 reference.
+- **Same stock, one minute apart: Ondo was 0.61% cheaper per share than bStock** (229.56 vs 230.97). This happened even though Ondo's route was 4 hops and bStock's was one. The cheapest issuer isn't predictable from hop count or from which issuer has more volume. It has to be quoted live, which is exactly Parity's consolidated quote.
+
+### F7. Every NVDA price we've measured in shares (2026-10-01)
+
+| UTC | Source | Token | Route | USDT per share | Reference* | Premium |
+|---|---|---|---|---|---|---|
+| 12:33 | fork | NVDAB | `Metric:NVDAB` | 230.42 | 230.22 | +0.09% |
+| 12:45 | fork | NVDAB | `Elfomofi:SKHYB > Pancakeswap V4:NVDAB` | 230.38 | 230.40 | −0.01% |
+| 13:19 | fork | NVDAon | `Lista V3:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon` | 229.90 | 230.16 | −0.11% |
+| 13:45 | fork | NVDAB | `Biswap V2:BTCB > Topaz Cl:BSC_ETH > Genius:USDC > Uniswap V4:NVDAB` | 231.73 | 230.55 | +0.51% |
+| 13:46 | fork | NVDAon | `Metric:NVDAon` | 230.69 | 230.55 | +0.06% |
+| 14:21 | fork | NVDAB | `Elfomofi:NVDAB` | 230.03 | ~229.84 | ~+0.08% |
+| 14:22 | fork | NVDAon | `Kipseli:NVDAB > Uniswap V4:NVDAon` | 229.72 | 229.84 | −0.05% |
+| **14:23** | **live** | NVDAB | `Elfomofi:NVDAB` | **230.97** | ~229.84 | **~+0.49%** |
+| **14:24** | **live** | NVDAon | `Uniswap V4:BTCB > Genius:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon` | **229.56** | 229.84 | **−0.12%** |
+
+\*Reference = `stockInfo.price` from the public RWA endpoint, read within ~1 minute (pre-market before 13:30 UTC). bStock returns `null`, so its reference is the Ondo token's value. The fork replay at 14:21 priced NVDAB at 230.03, and the live fill two minutes later got 230.97 on the same one-hop route. **Simulated prices are not guaranteed fills.**
+
+### F8. Decisions made because of these findings
+1. **Build Parity (not Stipend) as the entry.** Every risk we could test on Parity has been retired: region, contract holding, real routes, both issuers, live money.
+2. **ShareGuard design: the contract is the trader** (test B passed for both issuers). The EIP-7702 batch (D/E) stays as the path for wallets that support batching, such as Agentic Wallet, if it does.
+3. **Gas: always estimate, never trust the API's `gas`.** Simulate at the exact limit you send. Show users the real fee, not `tradeFee`.
+4. **Re-quote immediately before signing.** Quotes go stale, and prices moved 0.4% in two minutes (§F7).
+5. **Minimum order: 6 USDT** (Ondo's $5 is checked in USD).
+6. **Backend in AWS Seoul**, with an IP-country gate for end users and RPC failover.
+7. **xStocks: data and trap demo only.** Execution is bStock and Ondo.
+8. **The pitch is "correct and cheapest-right-now".** Units and traps are always on; the per-order saving vs the other issuer is shown when there is one (0.61% measured live).
+
+### F9. Still open
+- **Larger sizes.** Everything so far is $5–$10. Price impact at $100 and $1,000 is unknown.
+- **Ondo RFQ mode.** It's documented but never observed. Keep a code path and a test for it.
+- **Ondo multiplier on-chain.** There isn't one. ShareGuard uses a feed for Ondo, which still needs bounds and a signer design.
+- **Whether Binance Wallet / Agentic Wallet can send EIP-7702 batches.**
+- **Region behaviour for UK, Canada, Japan and the Netherlands.** These couldn't be tested; the US block is the only direct evidence.
+- **The Binance Transaction API (simulation/broadcast).** Not exercised yet; we used `eth_call` / `eth_estimateGas`. The hackathon stack expects it.
+- **ShareGuard is unaudited spike code.** It needs hardening (reentrancy guard, pause check, the Ondo feed) before any mainnet deployment.
 
 ## The DX report (25%): write it yourself, as you go
 The rules reject AI-generated reports, so **keep a timestamped human log from the first minute**. That covers time to first successful call, each error message copied verbatim, and page URL plus section for every doc problem. The items below are leads we found from outside with public endpoints. **Confirm each one yourself with your key before it goes in the report:**
@@ -319,6 +399,8 @@ The rules reject AI-generated reports, so **keep a timestamped human log from th
 - *Seen with your key:* Ondo's minimum is "5 USD" (`40375`, again HTTP 200), but the quote is in USDT. 5 USDT is rejected because USDT trades slightly under $1, and the docs don't mention the minimum.
 - *Seen with your key:* an NVDAB route went through SKHYB (SK Hynix bStock). Route transparency isn't exposed beyond `dexRouterList`.
 - *Seen with your key:* `tx.gas` / `estimateGasFee` is always `450000`, whatever the route. A 4-hop swap needed ~1,024,000 and reverted out of gas on mainnet when sent with the API's value (tx `0xfd7799e7…a40c`). This is the most costly pitfall so far, because users pay gas for the revert.
+- *Seen live:* a one-hop NVDAB fill delivered 0.51% less than the quote made seconds earlier (still inside the 1% minimum). Worth asking how long a quote is valid and what `priceImpactPercent: 0` actually means.
+- *Seen live:* swap #5 used 775,639 gas against the API's 450,000; `eth_estimateGas` overshot actual usage by ~21–27%.
 - *Seen during the run:* the public BSC RPC `bsc-rpc.publicnode.com` started answering HTTP 403 to the AWS box mid-session. Not Binance's API, but worth a line on "which RPC to use with the Trading API".
 
 ## Reproduce
