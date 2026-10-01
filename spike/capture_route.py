@@ -8,7 +8,7 @@ For one token it asks the Trading API for a USDT -> stock quote and swap transac
 Nothing is signed or sent. The output JSON is read by forge (vm.parseJson*), so every
 integer is written as a decimal string and every byte string as 0x-hex.
 
-    python3 capture_route.py --token NVDAB --usdt 5
+    python3 capture_route.py --token NVDAB --usdt 6
 """
 import argparse
 import json
@@ -40,7 +40,7 @@ def leg(client, token_addr, amount, wallet, slippage):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--token", required=True, choices=sorted(w.TOKENS))
-    p.add_argument("--usdt", type=float, default=5.0)
+    p.add_argument("--usdt", type=float, default=6.0)  # Ondo minimum is 5 USD; 5 USDT < $5
     p.add_argument("--slippage", default="1")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "captures"))
     a = p.parse_args()

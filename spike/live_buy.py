@@ -3,10 +3,10 @@
 Default is a DRY RUN: it checks balances, gets a quote, builds the swap and simulates it
 with eth_call. Nothing is signed. Add --send to actually trade; you'll be asked to type a
 confirmation first. Use a fresh burner wallet holding only what this test needs
-(about 5 USDT + 0.001 BNB for gas per buy), never your main wallet.
+(about 6 USDT + 0.001 BNB for gas per buy), never your main wallet.
 
-    python3 live_buy.py --token NVDAB --usdt 4            # dry run
-    python3 live_buy.py --token NVDAB --usdt 4 --send     # real buy
+    python3 live_buy.py --token NVDAB --usdt 6            # dry run
+    python3 live_buy.py --token NVDAB --usdt 6 --send     # real buy
 
 Private key: PARITY_PK env var or a hidden prompt. It is never printed or saved.
 Results (tx hashes, amounts, shares received, effective price per share) are written to
@@ -64,12 +64,14 @@ def build(client, token_addr, amount, wallet, slippage):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--token", required=True, choices=sorted(w.TOKENS))
-    p.add_argument("--usdt", type=float, default=4.0)
+    p.add_argument("--usdt", type=float, default=6.0)
     p.add_argument("--slippage", default="1", help="percent, passed to the Trading API")
     p.add_argument("--send", action="store_true", help="actually sign and broadcast (real funds)")
     a = p.parse_args()
     if not 0 < a.usdt <= MAX_USDT:
         sys.exit(f"--usdt must be between 0 and {MAX_USDT} for this test script")
+    if a.usdt < 5.5:
+        print("note: Ondo quotes fail below 5 USD (40375), and 5 USDT is worth slightly under $5")
 
     token_addr, source = w.TOKENS[a.token]
     amount = int(round(a.usdt * 10**18))

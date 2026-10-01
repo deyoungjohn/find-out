@@ -4,7 +4,7 @@ Goal: before building the app, prove three things on real infrastructure.
 
 1. **The server region works.** The Trading API blocks by the *caller's* IP (`40304`), so the backend must sit in an allowed country. Target: AWS Seoul (South Korea is not on the hackathon's restricted list; Japan, the UK, the Netherlands, Canada and the US are).
 2. **ShareGuard works with real routes.** Real API calldata is replayed on a BSC mainnet fork in three designs: plain wallet, ShareGuard as the trader, and an EIP-7702 batch (swap, then share check).
-3. **A real buy goes through.** About $4 each of a bStock and an Ondo stock on mainnet, from a burner wallet.
+3. **A real buy goes through.** About $6 each of a bStock and an Ondo stock on mainnet, from a burner wallet.
 
 Nothing here touches your main wallet. The fork test spends nothing. Only `live_buy.py --send` moves real funds, and it asks you to type a confirmation first.
 
@@ -77,15 +77,15 @@ The decision this produces:
 .venv/bin/python -c "from eth_account import Account; a=Account.create(); print(a.address); print(a.key.hex())"
 ```
 
-Save the key in a password manager, then clear the terminal. Fund the address on **BSC (BEP-20)** with about **10 USDT and 0.002 BNB**. That covers two $4 buys plus gas; each transaction costs a few cents.
+Save the key in a password manager, then clear the terminal. Fund the address on **BSC (BEP-20)** with about **15 USDT and 0.002 BNB**. That covers two $6 buys plus gas; each transaction costs a few cents.
 
 ## 5. Live buys (dry run first)
 
 ```bash
 read -rsp "Burner private key: " PARITY_PK && echo && export PARITY_PK   # never your main wallet
-.venv/bin/python live_buy.py --token NVDAB  --usdt 4          # dry run: balances, quote, route, simulation
-.venv/bin/python live_buy.py --token NVDAB  --usdt 4 --send   # type "BUY NVDAB" to confirm
-.venv/bin/python live_buy.py --token NVDAon --usdt 4 --send   # type "BUY NVDAon"
+.venv/bin/python live_buy.py --token NVDAB  --usdt 6          # dry run: balances, quote, route, simulation
+.venv/bin/python live_buy.py --token NVDAB  --usdt 6 --send   # type "BUY NVDAB" to confirm
+.venv/bin/python live_buy.py --token NVDAon --usdt 6 --send   # type "BUY NVDAon"
 unset PARITY_PK
 ```
 
@@ -96,6 +96,6 @@ The first `--send` per wallet sends an exact-amount USDT approval, then the swap
 Upload everything in `spike/results/` here (or commit and push it to the branch). I'll write the findings into `IDEAS.md`.
 
 ## Safety notes
-- The key is only read from `PARITY_PK` or a hidden prompt, and is never printed or saved. `live_buy.py` refuses amounts above 10 USDT.
+- The key is only read from `PARITY_PK` or a hidden prompt, and is never printed or saved. `live_buy.py` refuses amounts above 10 USDT. Ondo quotes need at least $5 (`40375`), and 5 USDT is worth slightly less, so the default is 6.
 - Approvals are for the exact amount, not unlimited.
 - `ShareGuard` and `BatchExecutor` are **unaudited spike code**. They're deployed only inside the fork test; don't deploy them to mainnet with real funds yet.

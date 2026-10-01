@@ -6,13 +6,15 @@ set -uo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.foundry/bin:$PATH"
 export BSC_RPC="${BSC_RPC:-https://bsc-rpc.publicnode.com}"
+# Ondo quotes need >= 5 USD; 5 USDT is slightly less (USDT ~ $0.9995), so default to 6.
+USDT_AMOUNT="${USDT_AMOUNT:-6}"
 mkdir -p results
 (cd shareguard && forge build >/dev/null)   # compile first so replay starts right after capture
 
 for t in ${@:-NVDAB NVDAon}; do
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   echo "================ $t ($stamp UTC)"
-  python3 capture_route.py --token "$t" --usdt 5 || { echo "capture failed for $t"; continue; }
+  python3 capture_route.py --token "$t" --usdt "$USDT_AMOUNT" || { echo "capture failed for $t"; continue; }
   cp "captures/$t.json" "results/capture_${t}_${stamp}.json"
   (cd shareguard && CAPTURE="../captures/$t.json" forge test --match-contract Fork -vv) \
     2>&1 | tee "results/fork_${t}_${stamp}.log"
