@@ -27,6 +27,7 @@ contract ShareGuardForkTest is Test {
         uint256 value;
         uint256 minReceive;
         uint256 quoted;
+        uint256 apiGas;
         string route;
     }
 
@@ -72,6 +73,7 @@ contract ShareGuardForkTest is Test {
         l.minReceive = vm.parseUint(json.readString(string.concat(key, ".minReceive")));
         l.quoted = vm.parseUint(json.readString(string.concat(key, ".toTokenAmount")));
         l.route = json.readString(string.concat(key, ".route"));
+        l.apiGas = vm.parseUint(json.readString(string.concat(key, ".gas")));
     }
 
     function _load(string memory key) internal returns (Leg memory l) {
@@ -218,5 +220,28 @@ contract ShareGuardForkTest is Test {
             assertEq(index, 2, "batch failed at the swap, not at the share check");
         }
         assertEq(IERC20(usdt).balanceOf(TEST_USER), amountIn, "USDT must be untouched after revert");
+    }
+
+    /// F. Does the route fit in the gas limit the API itself returns? On 2026-10-01 a live
+    ///    NVDAon swap sent with the API's gas=450000 reverted (FailedInnerCall) and needed ~1.03M.
+    ///    Forge doesn't cap gas, so A-E can pass while the real transaction would run out.
+    function test_F_fitsApiGasLimit() public {
+        Leg memory l = _load(".eoa");
+        // a transaction's limit also pays intrinsic cost: 21000 + calldata (~16 gas per byte, upper bound)
+        uint256 intrinsic = 21_000 + 16 * l.data.length;
+        uint256 budget = l.apiGas > intrinsic ? l.apiGas - intrinsic : 0;
+        vm.startPrank(TEST_USER, TEST_USER);
+        IERC20(usdt).approve(l.approveTarget, amountIn);
+        uint256 g0 = gasleft();
+        (bool okUnlimited,) = l.router.call{value: l.value}(l.data);
+        uint256 used = g0 - gasleft();
+        vm.stopPrank();
+        console2.log("API gas", l.apiGas);
+        console2.log("gas the route used (approx.)", used + intrinsic);
+        assertTrue(okUnlimited, "route failed even without a gas cap; see test A");
+        if (used > budget) {
+            console2.log("FINDING: the API's gas limit is too low for this route; a real tx would revert");
+        }
+        assertLe(used, budget, "API gas limit too low for this route");
     }
 }

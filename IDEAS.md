@@ -256,25 +256,50 @@ UK and Canada VPN exits could not connect, so they're untested.
 ### 2026-10-01: ShareGuard spike (`spike/`)
 - `ShareGuard.sol` (share-denominated minimum; multiplier from bStock `uiMultiplier()`, xStocks `multiplier()`, or a feed for Ondo) and `BatchExecutor.sol` (EIP-7702 delegate) written. **9/9 offline unit tests pass**, including an NFLX-style 10× multiplier, refund of unspent input, and atomic rollback of a 7702 batch when the share check fails.
 - Fork-test plumbing validated against live BSC state: real USDT funding on the fork, NVDAB's on-chain multiplier read (1.000778), ShareGuard deployed at its fixed address, and the 7702 path executing. The real-calldata replay needs an API key and is run from the EC2 box (`spike/README.md`).
-- **Results from the team's AWS Seoul run, 2026-10-01 12:33–12:47 UTC (US pre-market).** Raw logs and captures: `spike/results/`.
+- **Results from the team's AWS Seoul runs, 2026-10-01** (fork: 12:33–13:46 UTC, live: ~14:07–14:20 UTC). Raw logs, captures and the dry-run JSON: `spike/results/`.
 
 | Check | Result |
 |---|---|
-| Trading API reachable from AWS Seoul | ✅ Captures succeeded with the team's key. South Korea is not blocked, so Seoul is a valid backend region. |
-| A: API calldata replays as a plain wallet, NVDAB | ✅ 2/2 runs. Received within 0.005% of the quote (minReceive is quote − 1%). |
-| B: route works with **ShareGuard as the trader**, NVDAB | ✅ 2/2 runs. A contract can be the trader, so **the wrapper design is viable for bStock**. |
-| C: ShareGuard rejects a share shortfall, NVDAB | ✅ 2/2 runs |
-| D: EIP-7702 batch (approve, unchanged API swap, share check), NVDAB | ✅ 2/2 runs. The fallback design works too. |
-| E: the 7702 batch reverts atomically when the share check fails | ✅ 2/2 runs (failed at call 2, the share check) |
-| NVDAon (Ondo), all tests | ⏭ Skipped. Both quotes returned `40375 "Minimum order amount is 5 USD."` for **5 USDT**, because USDT is priced at ~$0.9995 so 5 USDT < $5. Scripts now default to 6 USDT; rerun pending. |
-| Same, during US regular hours (Ondo RFQ?) | _pending_ |
-| Live buy ~$6 NVDAB | _pending_ |
-| Live buy ~$6 NVDAon | _pending_ |
+| Trading API reachable from AWS Seoul | ✅ South Korea isn't blocked, so Seoul is a valid backend region. |
+| A: API calldata replays as a plain wallet | ✅ NVDAB 3/3 runs, NVDAon 2/2 runs. Received within 0.005% of the quote (minReceive = quote − 1%). |
+| B: route works with **ShareGuard as the trader** | ✅ NVDAB 3/3, NVDAon 2/2. **The wrapper design works for both bStock and Ondo.** |
+| C: ShareGuard rejects a share shortfall | ✅ all runs |
+| D: EIP-7702 batch (approve, unchanged API swap, share check) | ✅ all runs. The fallback design works too. |
+| E: the 7702 batch reverts atomically when the share check fails | ✅ all runs (failed at call 2, the share check) |
+| Ondo with 5 USDT | ❌ `40375 "Minimum order amount is 5 USD."`: USDT ≈ $0.9995, so 5 USDT < $5. Fixed by defaulting to 6 USDT. |
+| Ondo during US regular hours (RFQ?) | ✅ At 13:46 UTC (after the 13:30 open) Ondo still returned plain `SWAP`, `rfq: null`. No RFQ mode seen yet. |
+| Live buy NVDAB (6 USDT) | ⚠️ Not executed. The approval succeeded ([tx](https://bscscan.com/tx/0x6a8d334044e2dac39386dbad3fbf8a41b3b8477212fe6ac623dbe134db2af3da), 46,194 gas), then the script crashed while polling for the receipt (public RPC answered 403). |
+| Live buy NVDAon (6 USDT) | ❌ Sent and **reverted: out of gas** ([tx](https://bscscan.com/tx/0xfd7799e772868512799e7a114186a1778c506db765e0b54e05aa583f4481a40c)). No USDT lost; ~0.00002 BNB of gas. See below. |
+| F: route fits the API's own gas limit | _new test, pending the next run_ |
+| Live buys with the fixed script | _pending_ |
 
-**What the NVDAB runs showed**
-- **Price in shares:** 5 USDT bought 0.021683 NVDAB = **0.021700 NVDA shares** (on-chain multiplier 1.000778), i.e. **230.42 and 230.38 USDT per share**. The NVDA reference from the public endpoint 0.5–1.5 minutes later was 230.22 and 230.40 (pre-market): roughly **+0.09% and −0.01%**. bStock's public endpoint returns `stockInfo.price: null`, so the reference had to come from the Ondo token's data.
-- **Routes change minute to minute, sometimes through another company's stock.** 12:33: `Metric:NVDAB` (one hop). 12:45: `Elfomofi:SKHYB > Pancakeswap V4:NVDAB`, so "$5 of Nvidia" was routed **through SK Hynix's bStock token**. Both filled correctly, but users would never expect that path. That strengthens the case for Parity showing the real path.
-- **Design decision:** both ShareGuard designs work for bStock. Build **ShareGuard as the trader** (B) first: it works with any wallet, including ones without EIP-7702. Keep the 7702 batch (D/E) as the path for Agentic Wallet if it supports batches. Ondo remains unproven until the 6 USDT rerun, and again during regular hours.
+**Why the live swap failed: the API's gas number is a placeholder.** Every quote and swap we've seen returns `gas: 450000` (and `estimateGasFee: "450000"`), whatever the route. The NVDAon swap used a 4-hop route (`Topaz Cl:BTCB > Genius:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon`). Sent with 450,000 it reverted with `0x1425ea42` (OpenZeppelin `FailedInnerCall()`) after 434,909 gas. Replaying the same transaction at the previous block: 450,000 → revert, 3,000,000 → success, `eth_estimateGas` → **1,024,328**. Three things hid it:
+- The dry-run simulation (`eth_call`) ran without a gas cap.
+- Foundry doesn't cap gas either, so fork tests A–E passed.
+- The swap was sent with the API's number instead of an estimate.
+
+Fixes in `spike/`:
+- `live_buy.py` re-quotes after you confirm, sends `max(API gas, estimate × 1.25)`, and simulates **at that exact limit** before sending. Checked against the failed transaction: estimate 1,024,328, would send 1,280,410.
+- New fork test **F** fails when a route doesn't fit the API's gas limit.
+- RPC calls fail over across several public endpoints, and the transaction hash is saved before waiting for the receipt.
+
+**For Parity:** never trust the API's gas field; always estimate. And the 1% `minReceive` does nothing against out-of-gas reverts, which still cost the user gas.
+
+**Prices in shares (pre-market and just after the open):**
+
+| UTC | Token | Route | USDT per share | Reference | Premium |
+|---|---|---|---|---|---|
+| 12:33 | NVDAB | `Metric:NVDAB` | 230.42 | 230.22 | +0.09% |
+| 12:45 | NVDAB | `Elfomofi:SKHYB > Pancakeswap V4:NVDAB` | 230.38 | 230.40 | −0.01% |
+| 13:19 | NVDAon | `Lista V3:USDC > Uniswap V4:NVDAB > Uniswap V4:NVDAon` | 229.90 | 230.16 | −0.11% |
+| 13:45 | NVDAB | `Biswap V2:BTCB > Topaz Cl:BSC_ETH > Genius:USDC > Uniswap V4:NVDAB` | **231.73** | 230.55 | **+0.51%** |
+| 13:46 | NVDAon | `Metric:NVDAon` | **230.69** | 230.55 | **+0.06%** |
+
+(References come from the public endpoint within ~1 minute of each capture. bStock's own `stockInfo.price` is `null`, so the reference is taken from the Ondo token.)
+
+**What this changes:** issuer choice *can* matter even at $6. At 13:45–13:46, Nvidia via bStock cost **0.45% more** than via Ondo, because the bStock route went through BTCB and ETH in 4 hops while the Ondo route was one hop. Earlier the two were within 0.1%. So the cost difference comes from **route quality at that moment**, not the issuer's average spread. That's exactly what a consolidated quote per issuer catches. This refines lesson 2 of the region check above ("correctness, not savings"): pitch both, and show the saving per order instead of promising one. Routes also pass through other stocks (SKHYB = SK Hynix) and through BTC/ETH/BNB, all inside one transaction.
+
+**Design decision (updated):** ShareGuard as the trader works for **both** issuers, so build it first. Keep the 7702 batch for Agentic Wallet. Ondo still needs its multiplier from a feed.
 
 ## The DX report (25%): write it yourself, as you go
 The rules reject AI-generated reports, so **keep a timestamped human log from the first minute**. That covers time to first successful call, each error message copied verbatim, and page URL plus section for every doc problem. The items below are leads we found from outside with public endpoints. **Confirm each one yourself with your key before it goes in the report:**
@@ -293,6 +318,8 @@ The rules reject AI-generated reports, so **keep a timestamped human log from th
 - *Seen with your key:* stock quotes return a single route from a single vendor, so the "aggregator" gives no comparison for these tokens.
 - *Seen with your key:* Ondo's minimum is "5 USD" (`40375`, again HTTP 200), but the quote is in USDT. 5 USDT is rejected because USDT trades slightly under $1, and the docs don't mention the minimum.
 - *Seen with your key:* an NVDAB route went through SKHYB (SK Hynix bStock). Route transparency isn't exposed beyond `dexRouterList`.
+- *Seen with your key:* `tx.gas` / `estimateGasFee` is always `450000`, whatever the route. A 4-hop swap needed ~1,024,000 and reverted out of gas on mainnet when sent with the API's value (tx `0xfd7799e7…a40c`). This is the most costly pitfall so far, because users pay gas for the revert.
+- *Seen during the run:* the public BSC RPC `bsc-rpc.publicnode.com` started answering HTTP 403 to the AWS box mid-session. Not Binance's API, but worth a line on "which RPC to use with the Trading API".
 
 ## Reproduce
 ```bash

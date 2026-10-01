@@ -21,7 +21,6 @@ import urllib.request
 BASE = "https://web3.binance.com"
 PREFIX = "/build"
 CHAIN = "56"
-RPC = os.environ.get("BSC_RPC", "https://bsc-rpc.publicnode.com")
 USDT = "0x55d398326f99059fF775485246999027B3197955"  # BSC USDT (18 decimals)
 
 # Fixed addresses the fork test also hard-codes (spike/shareguard/test/ShareGuardFork.t.sol)
@@ -104,20 +103,31 @@ class Client:
             "slippagePercent": slippage})
 
 
-def rpc(method, params, retries=3):
+# Python scripts rotate through several public RPCs: publicnode started answering 403 to the
+# EC2 box mid-run on 2026-10-01. (forge still uses the single BSC_RPC for forking.)
+RPCS = [u for u in [os.environ.get("BSC_RPC"), "https://bsc-dataseed.bnbchain.org",
+                    "https://bsc-dataseed1.defibit.io", "https://bsc-rpc.publicnode.com"] if u]
+
+
+def rpc(method, params, rounds=2):
+    """JSON-RPC with failover. Transport errors (403/429/timeouts) rotate to the next endpoint;
+    a JSON-RPC error (e.g. execution reverted) is a real answer and is raised as RuntimeError."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    for i in range(retries):
+    last = None
+    for attempt in range(rounds * len(RPCS)):
+        url = RPCS[attempt % len(RPCS)]
         try:
-            req = urllib.request.Request(RPC, data=body, headers={"content-type": "application/json",
+            req = urllib.request.Request(url, data=body, headers={"content-type": "application/json",
                                                                   "User-Agent": "curl/8"})
             res = json.load(urllib.request.urlopen(req, timeout=30))
-            if "error" in res:
-                raise RuntimeError(f"{method}: {res['error']}")
-            return res["result"]
-        except (urllib.error.URLError, TimeoutError):
-            if i == retries - 1:
-                raise
-            time.sleep(2 * (i + 1))
+        except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            last = f"{url}: {e}"
+            time.sleep(1 + attempt)
+            continue
+        if "error" in res:
+            raise RuntimeError(f"{method}: {res['error']}")
+        return res["result"]
+    raise RuntimeError(f"{method}: all RPC endpoints failed; last: {last}")
 
 
 def word(x):

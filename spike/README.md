@@ -89,7 +89,7 @@ read -rsp "Burner private key: " PARITY_PK && echo && export PARITY_PK   # never
 unset PARITY_PK
 ```
 
-The first `--send` per wallet sends an exact-amount USDT approval, then the swap. Each run saves `results/live_<token>_*.json` with the BscScan link, tokens and **shares** received, USDT per share, premium vs the US reference price, and gas. If the API answers with RFQ instead of SWAP, the script stops before spending and saves the RFQ payload. That alone is a finding.
+The first `--send` per wallet sends an exact-amount USDT approval, then the swap. The script re-quotes after you confirm, estimates the real gas (the API's `gas` is always 450000, too low for multi-hop routes), and simulates at that exact limit before sending. If anything would revert, it stops without sending. Each run saves `results/live_<token>_*.json` with the BscScan link, tokens and **shares** received, USDT per share, premium vs the US reference price, and gas. If the API answers with RFQ instead of SWAP, the script stops before spending and saves the RFQ payload. That alone is a finding.
 
 ## 6. Bring the results back
 

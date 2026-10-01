@@ -34,25 +34,49 @@ def load_account():
 
 
 def send(Account, acct, to, data, value=0, gas=None):
+    """Sign and broadcast. Returns (tx_hash, gas_price); does not wait."""
     nonce = int(w.rpc("eth_getTransactionCount", [acct.address, "pending"]), 16)
     gas_price = int(w.rpc("eth_gasPrice", []), 16)
-    call = {"from": acct.address, "to": to, "data": data, "value": hex(value)}
     if not gas:
+        call = {"from": acct.address, "to": to, "data": data, "value": hex(value)}
         gas = int(int(w.rpc("eth_estimateGas", [call]), 16) * 1.3)
-    tx = {"chainId": 56, "nonce": nonce, "to": to, "data": data, "value": value, "gas": int(str(gas), 0),
-          "gasPrice": gas_price}
+    tx = {"chainId": 56, "nonce": nonce, "to": to, "data": data, "value": value, "gas": int(gas), "gasPrice": gas_price}
     signed = Account.sign_transaction(tx, acct.key)
     raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
     tx_hash = w.rpc("eth_sendRawTransaction", ["0x" + bytes(raw).hex()])
-    print("   sent", tx_hash, "- waiting for receipt")
-    for _ in range(90):
-        receipt = w.rpc("eth_getTransactionReceipt", [tx_hash])
+    print(f"   sent {tx_hash} (gas limit {int(gas)})\n   https://bscscan.com/tx/{tx_hash}")
+    return tx_hash, gas_price
+
+
+def wait_receipt(tx_hash, seconds=180):
+    """Polls for a receipt and tolerates flaky RPCs. Returns None on timeout, never raises."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            receipt = w.rpc("eth_getTransactionReceipt", [tx_hash])
+        except Exception as e:  # noqa: BLE001 - keep polling through RPC hiccups
+            print("   (receipt poll error, retrying:", str(e)[:80], ")")
+            receipt = None
         if receipt:
             ok = receipt["status"] == "0x1"
-            print("   ", "confirmed" if ok else "REVERTED", "in block", int(receipt["blockNumber"], 16))
-            return tx_hash, receipt, gas_price
-        time.sleep(2)
-    raise RuntimeError(f"no receipt after 3 minutes for {tx_hash}")
+            print("   ", "confirmed" if ok else "REVERTED", "in block", int(receipt["blockNumber"], 16),
+                  "gas used", int(receipt["gasUsed"], 16))
+            return receipt
+        time.sleep(3)
+    print("   no receipt yet; check the BscScan link above")
+    return None
+
+
+def swap_gas(wallet, tx):
+    """The API returns gas=450000 for every route; a 4-hop route needed ~1.03M and reverted.
+    Use max(API value, estimate x 1.25), and prove it with eth_call at that exact limit."""
+    value = hex(int(str(tx.get("value") or "0"), 0))
+    call = {"from": wallet, "to": tx["to"], "data": tx["data"], "value": value}
+    estimate = int(w.rpc("eth_estimateGas", [call]), 16)  # raises if the swap would revert at any gas
+    api_gas = int(str(tx.get("gas") or "0"), 0)
+    limit = max(api_gas, int(estimate * 1.25))
+    w.rpc("eth_call", [{**call, "gas": hex(limit)}, "latest"])
+    return limit, estimate, api_gas
 
 
 def build(client, token_addr, amount, wallet, slippage):
@@ -115,15 +139,15 @@ def main():
     allowance = w.erc20_allowance(w.USDT, wallet, spender)
     if allowance >= amount:
         try:
-            w.rpc("eth_call", [{"from": wallet, "to": tx["to"], "data": tx["data"],
-                                "value": hex(int(str(tx.get("value") or "0"), 0))}, "latest"])
-            print("  simulation: OK")
-            result["simulation"] = "ok"
+            limit, estimate, api_gas = swap_gas(wallet, tx)
+            print(f"  simulation: OK. gas estimate {estimate:,} vs API gas {api_gas:,}"
+                  + ("  <-- API value too low, would revert" if estimate > api_gas else ""))
+            result["simulation"] = {"ok": True, "estimateGas": estimate, "apiGas": api_gas}
         except RuntimeError as e:
             print("  simulation: REVERT", e)
             result["simulation"] = f"revert: {e}"
     else:
-        print(f"  simulation: skipped until USDT is approved for {spender} (allowance {allowance})")
+        print(f"  simulation: skipped until USDT is approved for {spender} (allowance {allowance / 1e18})")
         result["simulation"] = "needs approval first"
 
     if not a.send:
@@ -137,37 +161,42 @@ def main():
 
     if allowance < amount:
         print(f"1/2 approve exactly {a.usdt} USDT to {spender}")
-        data = w.SEL["approve"] + w.word(spender) + w.word(amount)
-        h, r, _ = send(Account, acct, w.USDT, data)
+        h, _ = send(Account, acct, w.USDT, w.SEL["approve"] + w.word(spender) + w.word(amount))
         result["approveTx"] = h
-        if r["status"] != "0x1":
-            result["aborted"] = "approve reverted"
+        r = wait_receipt(h)
+        if not r or r["status"] != "0x1":
+            result["aborted"] = "approve not confirmed" if not r else "approve reverted"
             return finish(result)
-        # the first quote may have expired while we waited; rebuild and re-simulate
-        q, routes, sw = build(client, token_addr, amount, wallet, a.slippage)
-        tx = sw.get("tx") or {}
-        if sw.get("executionMode") != "SWAP":
-            result["aborted"] = "route switched to RFQ after approval"
-            return finish(result)
-        try:
-            w.rpc("eth_call", [{"from": wallet, "to": tx["to"], "data": tx["data"],
-                                "value": hex(int(str(tx.get("value") or "0"), 0))}, "latest"])
-        except RuntimeError as e:
-            result["aborted"] = f"swap simulation reverted after approval: {e}"
-            return finish(result)
-        result["simulationAfterApprove"] = "ok"
-        result["quote"]["routeAtSend"] = w.route_text(q)
 
-    print("2/2 swap")
-    h, r, gas_price = send(Account, acct, tx["to"], tx["data"], int(str(tx.get("value") or "0"), 0), tx.get("gas"))
+    # Fresh quote right before sending: the earlier one may have expired while you typed.
+    q, routes, sw = build(client, token_addr, amount, wallet, a.slippage)
+    tx = sw.get("tx") or {}
+    result["quote"]["routeAtSend"] = w.route_text(q)
+    result["quote"]["toTokenAmountAtSend"] = q.get("toTokenAmount")
+    if sw.get("executionMode") != "SWAP" or not tx.get("to"):
+        result["aborted"] = "route switched to RFQ before sending"
+        return finish(result)
+    try:
+        limit, estimate, api_gas = swap_gas(wallet, tx)
+    except RuntimeError as e:
+        result["aborted"] = f"swap would revert, nothing sent: {e}"
+        return finish(result)
+    result.update({"gasLimitSent": limit, "estimateGas": estimate, "apiGas": api_gas})
+    print(f"2/2 swap via {w.route_text(q)}\n   gas: estimate {estimate:,}, API {api_gas:,}, sending {limit:,}")
+
+    h, gas_price = send(Account, acct, tx["to"], tx["data"], int(str(tx.get("value") or "0"), 0), limit)
     result["swapTx"] = h
+    result["bscscan"] = f"https://bscscan.com/tx/{h}"
+    r = wait_receipt(h)
+    if not r:
+        result["swapStatus"] = "unknown (no receipt yet)"
+        return finish(result)
     result["swapStatus"] = "success" if r["status"] == "0x1" else "reverted"
     got = w.erc20_balance(token_addr, wallet) - stock_before
     shares = got * mult // 10**18
     gas_bnb = int(r["gasUsed"], 16) * gas_price / 1e18
     result.update({"tokensReceived": str(got), "sharesReceived": str(shares), "gasUsed": int(r["gasUsed"], 16),
-                   "gasBNB": gas_bnb, "minReceive": tx.get("minReceiveAmount"),
-                   "bscscan": f"https://bscscan.com/tx/{h}"})
+                   "gasBNB": gas_bnb, "minReceive": tx.get("minReceiveAmount")})
     if shares:
         per_share = amount / shares
         result["usdtPerShare"] = per_share
