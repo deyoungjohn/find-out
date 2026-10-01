@@ -226,9 +226,48 @@ These are subjective estimates against the published rubric:
 
 ### Eligibility: how each idea handles it
 Transfers work, but an app that helps people buy these tokens takes on the issuer's user-eligibility duties. Neither idea can make that go away, so both are designed not to be a new distributor.
-- **Parity**: execution goes through the user's own **Binance Web3 Wallet / Agentic Wallet and the Trading API**. The venue that already onboarded the user places the trade. Parity supplies the quote, the integrity grade and the ShareGuard check. Quotes, integrity scores and the MCP data need no eligibility at all. The app also blocks the hackathon's restricted regions itself. *To verify with your key:* whether Trading API bStock quotes and swaps already enforce region for the wallet or key. Log the answer in the DX report either way.
+- **Parity**: execution goes through the user's own **Binance Web3 Wallet / Agentic Wallet and the Trading API**. The venue that already onboarded the user places the trade. Parity supplies the quote, the integrity grade and the ShareGuard check. Quotes, integrity scores and the MCP data need no eligibility at all. The app also blocks the hackathon's restricted regions itself. **Verified 2026-10-01 (see Findings log):** the Trading API enforces region by the **calling server's IP**, not by token or wallet. So Binance checks Parity's backend, not the end user, and blocking end users is Parity's job.
 - **Stipend**: this is the more exposed of the two, because an agent managing someone's securities for a fee looks like investment management. Build it as a **policy module on the user's own smart account** (EIP-7702 / ERC-7579 session key) instead of a separate vault, so the tokens never leave the user's wallet and the agent only holds a capped, revocable key. Trades still go through the Binance wallet stack. For the hackathon, demo only with your own funds.
 - **Both**: no issuer mint or redemption (that requires issuer KYC). Secondary-market only, small amounts from your own wallet, with the restricted-regions gate on.
+
+## Findings log
+
+### 2026-10-01: Trading API region check (`research/region_check.py`, run by the team)
+Five runs, $10 USDT → stock quotes. Raw reports were kept locally because they contain the team's wallet addresses.
+
+| Run (UTC) | Caller IP | Wallet | Result |
+|---|---|---|---|
+| 10:19 | not recorded | fresh random | All 8 tokens: quote ✓, quote with wallet ✓, swap built ✓ (Ondo needs the wallet, see below) |
+| 10:30 | not recorded | team agent wallet | Same as above |
+| 10:33 | **NG** | team wallet | Same as above |
+| 10:50 | **US** (VPN) | fresh random | **Every call refused**, including `supported/chain`: `40304 "Service not available due to compliance restriction"`, returned as **HTTP 200** |
+| 10:51 | **MX** (VPN) | fresh random | Same as the NG run |
+
+UK and Canada VPN exits could not connect, so they're untested.
+
+**What we learned**
+1. **Region is enforced on the API caller's IP, for the whole API.** It's not per token and not per wallet: a random wallet with no history got bStock swaps built just like a real one. For a web app, the caller is **our backend**. So (a) the backend must run in an allowed country (avoid US regions, AWS London, DigitalOcean Amsterdam, Tokyo and Canada; AWS Seoul is the current candidate, pending the check in `spike/README.md`), and (b) Binance never sees the end user, so Parity must geo-block restricted regions itself. Agentic Wallet / `baw` calls come from the user's own machine, so there Binance's check applies directly.
+2. **At $10, cost is gas, not issuer choice.** Effective price was within ±0.1% of the token's unit price for all 8 tokens. `tradeFee` was $0.02–0.04 per order. That matches 450k gas at BSC prices, so ~0.2–0.4% of a $10 order is network fee, against a ~0.05% share-true gap between Ondo and bStock. **Parity's pitch is correctness (units, traps, a guarantee in shares), not savings.** The consolidated quote shows total cost including gas and prefers fewer hops for small orders. Larger sizes are still untested.
+3. **One route, one vendor.** Every stock quote returned exactly one route from `LiquidMesh` through router `0xB44446b0c8E56988c34f7Ff73Ae904982b5FdDA5`, which is also the approve target. BNB returned two routes (adding LI.FI or Pancake). Parity has to build the cross-issuer comparison itself by quoting each issuer's token separately.
+4. **Issuers are linked by pools, and routes can be long.** NVDAon was bought via USDT → USDC → **NVDAB** → NVDAon (a Uniswap v4 NVDAB/NVDAon pool). One NVDAB quote went USDT → USD1 (RFQ Halfmoon) → **WBNB** → USDC → NVDAB, four hops through BNB for "$10 of Nvidia". The next run routed NVDAB in one hop. Parity should show which path and issuer you actually bought through.
+5. **Ondo's docs and behaviour disagree.** Docs: Ondo is RFQ (EIP-712 signature + `order/submit`). Observed in US pre-market: a quote without a wallet fails with `40001 "userWalletAddress is required for RFQ (Ondo) quote"`, but with a wallet the API returns `executionMode: SWAP`, `rfq: null`. It may switch to real RFQ during regular hours, so code must handle both. bStock reported `TRADING` with `marketStatus: null` at the same time.
+6. **Swap transactions default to 1% slippage** (`minReceiveAmount` = quote − 1%). A share-based minimum from ShareGuard can be tighter.
+
+### 2026-10-01: ShareGuard spike (`spike/`)
+- `ShareGuard.sol` (share-denominated minimum; multiplier from bStock `uiMultiplier()`, xStocks `multiplier()`, or a feed for Ondo) and `BatchExecutor.sol` (EIP-7702 delegate) written. **9/9 offline unit tests pass**, including an NFLX-style 10× multiplier, refund of unspent input, and atomic rollback of a 7702 batch when the share check fails.
+- Fork-test plumbing validated against live BSC state: real USDT funding on the fork, NVDAB's on-chain multiplier read (1.000778), ShareGuard deployed at its fixed address, and the 7702 path executing. The real-calldata replay needs an API key and is run from the EC2 box (`spike/README.md`).
+- **Pending, to be filled from the runs:**
+
+| Check | Result |
+|---|---|
+| Region check from AWS Seoul | _pending_ |
+| A: API calldata replays as plain wallet (NVDAB / NVDAon) | _pending_ |
+| B: route works with ShareGuard as the trader | _pending_ (decides the wrapper design) |
+| C: ShareGuard rejects a share shortfall | _pending_ |
+| D/E: EIP-7702 batch swap + share check, atomic revert | _pending_ (fallback design) |
+| Same, during US regular hours (Ondo RFQ?) | _pending_ |
+| Live buy ~$4 NVDAB: shares received, USDT/share, premium vs reference, gas | _pending_ |
+| Live buy ~$4 NVDAon: same | _pending_ |
 
 ## The DX report (25%): write it yourself, as you go
 The rules reject AI-generated reports, so **keep a timestamped human log from the first minute**. That covers time to first successful call, each error message copied verbatim, and page URL plus section for every doc problem. The items below are leads we found from outside with public endpoints. **Confirm each one yourself with your key before it goes in the report:**
@@ -240,11 +279,18 @@ The rules reject AI-generated reports, so **keep a timestamped human log from th
 - The tokenized-securities skill says Ondo is "the only supported provider", which contradicts the agentic-wallet skill.
 - The `referencePrice` definition (see §2 warning).
 - xStocks on BSC: stale prices with ~$0 volume that are still returned as tradable (`TRADING`).
+- *Seen with your key on 2026-10-01:* the region block `40304` comes back as **HTTP 200**, so clients checking only the status code treat it as success. It also blocks unrelated calls like `supported/chain`.
+- *Seen with your key:* the Trading API reference documents no region, compliance or KYC error codes at all.
+- *Seen with your key:* Ondo is documented as RFQ (EIP-712 + `order/submit`), but pre-market quotes returned `SWAP` with `rfq: null`, while still demanding `userWalletAddress` "for RFQ (Ondo)".
+- *Seen with your key:* the field name `tradeFee` doesn't say it's the network fee in USD (it matches gas × gas price).
+- *Seen with your key:* stock quotes return a single route from a single vendor, so the "aggregator" gives no comparison for these tokens.
 
 ## Reproduce
 ```bash
 python3 research/analyze_winners.py                        # hackathon-winner patterns
 python3 research/fetch_snapshot.py                         # fresh public-API + on-chain snapshot
 python3 research/analyze_snapshot.py research/snapshot-<date>
+python3 research/region_check.py --label <where>           # needs your API key; read-only
+cd spike && ./setup.sh && ./run_fork_spike.sh              # ShareGuard on a BSC fork; see spike/README.md
 ```
 Numbers in this document come from `research/snapshot-2026-09-30/` (fetched 19:35 UTC, US regular session).
