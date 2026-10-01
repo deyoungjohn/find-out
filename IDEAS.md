@@ -315,13 +315,13 @@ The two NVDAon runs at 5 USDT skipped (minimum, §F4) and aren't counted. F's ga
 
 ### F6. Live mainnet buys (2026-10-01, burner wallet `0x2Bf7EdF53bc6BE6FF98F149387F3818cE28d2930`, from AWS Seoul)
 
-| # | UTC | Action | Result | Gas used / limit | Evidence |
+| # | Block time (UTC) | Action | Result | Gas used / limit | Evidence |
 |---|---|---|---|---|---|
-| 1 | ~14:10 | Approve 6 USDT to router | ✅ | 46,194 | [tx](https://bscscan.com/tx/0x6a8d334044e2dac39386dbad3fbf8a41b3b8477212fe6ac623dbe134db2af3da) |
-| 2 | ~14:12 | Swap 6 USDT → NVDAon (first script) | ❌ **reverted, out of gas** | 434,909 / 450,000 (API value) | [tx](https://bscscan.com/tx/0xfd7799e772868512799e7a114186a1778c506db765e0b54e05aa583f4481a40c) |
-| 3 | 14:23 | Swap 6 USDT → NVDAB (fixed script; used approval #1) | ✅ | 437,968 / 698,076 | [tx](https://bscscan.com/tx/0x726aace915e720ca46f4cfb344a7283c4aa1ef59bde225fdea9796e2f0eb0ba7) |
-| 4 | 14:24 | Approve 6 USDT to router | ✅ | 46,194 / 60,548 | [tx](https://bscscan.com/tx/0xa0398a478172679e30e03c6c09dfec9483466d6f7f3c7b95dfdb3802cb173e8e) |
-| 5 | 14:24 | Swap 6 USDT → NVDAon (fixed script) | ✅ | 775,639 / 1,177,930 | [tx](https://bscscan.com/tx/0xb3ab17385d3872dfaec05367582739a10b08a9586861c56e02f1c2e264c49637) |
+| 1 | 14:08:39 | Approve 6 USDT to router | ✅ | 46,194 | [tx](https://bscscan.com/tx/0x6a8d334044e2dac39386dbad3fbf8a41b3b8477212fe6ac623dbe134db2af3da) |
+| 2 | 14:09:48 | Swap 6 USDT → NVDAon (first script) | ❌ **reverted, out of gas** | 434,909 / 450,000 (API value) | [tx](https://bscscan.com/tx/0xfd7799e772868512799e7a114186a1778c506db765e0b54e05aa583f4481a40c) |
+| 3 | 14:23:43 | Swap 6 USDT → NVDAB (fixed script; used approval #1) | ✅ | 437,968 / 698,076 | [tx](https://bscscan.com/tx/0x726aace915e720ca46f4cfb344a7283c4aa1ef59bde225fdea9796e2f0eb0ba7) |
+| 4 | 14:24:21 | Approve 6 USDT to router | ✅ | 46,194 / 60,548 | [tx](https://bscscan.com/tx/0xa0398a478172679e30e03c6c09dfec9483466d6f7f3c7b95dfdb3802cb173e8e) |
+| 5 | 14:24:25 | Swap 6 USDT → NVDAon (fixed script) | ✅ | 775,639 / 1,177,930 | [tx](https://bscscan.com/tx/0xb3ab17385d3872dfaec05367582739a10b08a9586861c56e02f1c2e264c49637) |
 
 **Final wallet state:** 3 USDT, 0.025957 NVDAB, 0.026093 NVDAon, allowance 0. **Total gas for all five transactions: 0.000087 BNB (~$0.07)** at 0.05 gwei. No USDT was lost to the revert.
 
